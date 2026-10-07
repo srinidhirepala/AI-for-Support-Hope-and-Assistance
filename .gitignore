@@ -1,0 +1,10 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+
+# Trained ML models
+models/emergency/
+
+# Emergency detection datasets
+data/emergency/
