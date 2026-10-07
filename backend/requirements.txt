@@ -58,6 +58,7 @@ sentence-transformers
 openai
 httpx
 requests
+google-genai
 
 # ------------------------------------------------------------
 # 9. Semantic Memory / Vector Search

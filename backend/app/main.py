@@ -310,7 +310,9 @@ def chat(
     else:
 
         response_text = generate_response(
-            message.content
+            message=message.content,
+            emotion=emotion,
+            relevant_memories=relevant_memories,
         )
 
 
