@@ -21,9 +21,20 @@ from schemas import (
 )
 
 from services.chat_service import generate_response
+
 from ml.emotion.emotion_detector import detect_emotion
+
 from ml.emergency.emergency_detector import detect_emergency
 
+from ml.memory.memory_service import (
+    retrieve_relevant_memories,
+    store_message_embedding,
+)
+
+
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
 
 app = FastAPI(
     title="ASHA",
@@ -59,7 +70,10 @@ def health():
 # CREATE USER
 # ============================================================
 
-@app.post("/users", response_model=UserResponse)
+@app.post(
+    "/users",
+    response_model=UserResponse,
+)
 def create_user(
     user: UserCreate,
     db: Session = Depends(get_db),
@@ -81,7 +95,10 @@ def create_user(
 # CREATE CONVERSATION
 # ============================================================
 
-@app.post("/conversations", response_model=ConversationResponse)
+@app.post(
+    "/conversations",
+    response_model=ConversationResponse,
+)
 def create_conversation(
     conversation: ConversationCreate,
     db: Session = Depends(get_db),
@@ -93,7 +110,9 @@ def create_conversation(
     )
 
     if not user:
-        return {"error": "User not found"}
+        return {
+            "error": "User not found"
+        }
 
     new_conversation = Conversation(
         user_id=conversation.user_id
@@ -110,19 +129,26 @@ def create_conversation(
 # CREATE MESSAGE
 # ============================================================
 
-@app.post("/messages", response_model=MessageResponse)
+@app.post(
+    "/messages",
+    response_model=MessageResponse,
+)
 def create_message(
     message: MessageCreate,
     db: Session = Depends(get_db),
 ):
     conversation = (
         db.query(Conversation)
-        .filter(Conversation.id == message.conversation_id)
+        .filter(
+            Conversation.id == message.conversation_id
+        )
         .first()
     )
 
     if not conversation:
-        return {"error": "Conversation not found"}
+        return {
+            "error": "Conversation not found"
+        }
 
     new_message = Message(
         conversation_id=message.conversation_id,
@@ -138,7 +164,7 @@ def create_message(
 
 
 # ============================================================
-# CHAT
+# ASHA CHAT ENDPOINT
 # ============================================================
 
 @app.post("/chat")
@@ -146,13 +172,16 @@ def chat(
     message: MessageCreate,
     db: Session = Depends(get_db),
 ):
+
     # --------------------------------------------------------
-    # Check conversation
+    # 1. Check conversation
     # --------------------------------------------------------
 
     conversation = (
         db.query(Conversation)
-        .filter(Conversation.id == message.conversation_id)
+        .filter(
+            Conversation.id == message.conversation_id
+        )
         .first()
     )
 
@@ -161,8 +190,9 @@ def chat(
             "error": "Conversation not found"
         }
 
+
     # --------------------------------------------------------
-    # 1. Save user's message
+    # 2. Save user's message
     # --------------------------------------------------------
 
     user_message = Message(
@@ -175,19 +205,24 @@ def chat(
     db.commit()
     db.refresh(user_message)
 
+
     # --------------------------------------------------------
-    # 2. Detect emotion
+    # 3. Detect emotion
     # --------------------------------------------------------
 
-    emotion_results = detect_emotion(message.content)
+    emotion_results = detect_emotion(
+        message.content
+    )
 
     top_emotion = emotion_results[0]
 
     emotion = top_emotion["label"]
+
     emotion_confidence = top_emotion["score"]
 
+
     # --------------------------------------------------------
-    # 3. Save emotion result
+    # 4. Save emotion result
     # --------------------------------------------------------
 
     emotion_result = EmotionResult(
@@ -200,17 +235,26 @@ def chat(
     db.commit()
     db.refresh(emotion_result)
 
+
     # --------------------------------------------------------
-    # 4. Detect potential crisis
+    # 5. Detect potential crisis
     # --------------------------------------------------------
 
-    emergency_result = detect_emergency(message.content)
+    emergency_result = detect_emergency(
+        message.content
+    )
 
     risk_signal = emergency_result["risk_signal"]
+
     risk_confidence = emergency_result["confidence"]
 
+    detection_source = emergency_result.get(
+        "detection_source"
+    )
+
+
     # --------------------------------------------------------
-    # 5. Save emergency-risk assessment
+    # 6. Save emergency-risk assessment
     # --------------------------------------------------------
 
     risk_assessment = RiskAssessment(
@@ -223,21 +267,44 @@ def chat(
     db.commit()
     db.refresh(risk_assessment)
 
+
     # --------------------------------------------------------
-    # 6. Generate response
+    # 7. Memory retrieval
+    #
+    # Crisis messages DO NOT retrieve normal memories.
+    # Normal messages retrieve only relevant memories.
+    # --------------------------------------------------------
+
+    if risk_signal == "potential_crisis":
+
+        relevant_memories = []
+
+    else:
+
+        relevant_memories = retrieve_relevant_memories(
+            db=db,
+            user_id=conversation.user_id,
+            query_text=message.content,
+            top_k=5,
+            max_distance=0.5,
+        )
+
+
+    # --------------------------------------------------------
+    # 8. Generate ASHA response
     # --------------------------------------------------------
 
     if risk_signal == "potential_crisis":
 
         response_text = (
-            "I'm really sorry you're going through something this "
-            "difficult. You don't have to handle this alone. "
-            "Please consider reaching out to someone you trust or "
-            "a qualified mental health professional. "
-            "If you feel you may be in immediate danger or might "
-            "act on these thoughts, please contact your local "
-            "emergency service or go to the nearest emergency "
-            "department."
+            "I'm really sorry you're going through something "
+            "this difficult. You don't have to handle this alone. "
+            "Please consider reaching out to someone you trust "
+            "or a qualified mental health professional. "
+            "If you feel you may be in immediate danger or "
+            "might act on these thoughts, please contact your "
+            "local emergency service or go to the nearest "
+            "emergency department."
         )
 
     else:
@@ -246,8 +313,24 @@ def chat(
             message.content
         )
 
+
     # --------------------------------------------------------
-    # 7. Save ASHA's response
+    # 9. Store current user message embedding
+    #
+    # This is done AFTER memory retrieval so the current
+    # message does not retrieve itself.
+    # --------------------------------------------------------
+
+    store_message_embedding(
+        db=db,
+        message_id=user_message.id,
+        user_id=conversation.user_id,
+        text=message.content,
+    )
+
+
+    # --------------------------------------------------------
+    # 10. Save ASHA's response
     # --------------------------------------------------------
 
     assistant_message = Message(
@@ -260,8 +343,9 @@ def chat(
     db.commit()
     db.refresh(assistant_message)
 
+
     # --------------------------------------------------------
-    # 8. Return complete response
+    # 11. Return complete response
     # --------------------------------------------------------
 
     return {
@@ -270,22 +354,24 @@ def chat(
             "conversation_id": user_message.conversation_id,
             "sender": user_message.sender,
             "content": user_message.content,
-            "timestamp": user_message.timestamp,
         },
 
         "emotion": emotion,
+
         "emotion_confidence": emotion_confidence,
 
         "emergency": {
             "risk_signal": risk_signal,
             "confidence": risk_confidence,
+            "detection_source": detection_source,
         },
+
+        "relevant_memories": relevant_memories,
 
         "assistant_message": {
             "id": assistant_message.id,
             "conversation_id": assistant_message.conversation_id,
             "sender": assistant_message.sender,
             "content": assistant_message.content,
-            "timestamp": assistant_message.timestamp,
         },
     }

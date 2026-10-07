@@ -46,14 +46,19 @@ def store_message_embedding(
 
     return memory
 
+
 def retrieve_relevant_memories(
     db: Session,
     user_id: int,
     query_text: str,
     top_k: int = 5,
+    max_distance: float = 0.5,
 ):
     """
-    Retrieve the most semantically relevant previous user messages.
+    Retrieve semantically relevant previous user messages.
+
+    Only memories with cosine distance at or below
+    max_distance are returned.
     """
 
     query_embedding = generate_embedding(query_text)
@@ -63,7 +68,11 @@ def retrieve_relevant_memories(
     )
 
     results = (
-        db.query(MessageEmbedding, Message, distance_expression.label("distance"))
+        db.query(
+            MessageEmbedding,
+            Message,
+            distance_expression.label("distance"),
+        )
         .join(
             Message,
             Message.id == MessageEmbedding.message_id,
@@ -80,12 +89,18 @@ def retrieve_relevant_memories(
     memories = []
 
     for embedding_record, message, distance in results:
+
+        distance = float(distance)
+
+        if distance > max_distance:
+            continue
+
         memories.append(
             {
                 "message_id": message.id,
                 "content": message.content,
                 "sender": message.sender,
-                "distance": float(distance),
+                "distance": distance,
             }
         )
 
