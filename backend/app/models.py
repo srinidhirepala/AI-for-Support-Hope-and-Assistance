@@ -12,6 +12,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from database import Base
+from pgvector.sqlalchemy import Vector
 
 
 class User(Base):
@@ -125,3 +126,31 @@ class SelfAssessment(Base):
     assessment_type = Column(String(50), nullable=False)
     score = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class MessageEmbedding(Base):
+    __tablename__ = "message_embeddings"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    message_id = Column(
+        Integer,
+        ForeignKey("messages.id"),
+        nullable=False,
+        unique=True,
+    )
+
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id"),
+        nullable=False,
+    )
+
+    embedding = Column(
+        Vector(384),
+        nullable=False,
+    )
+
+    created_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+    )
