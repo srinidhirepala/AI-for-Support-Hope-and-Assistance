@@ -2,15 +2,7 @@ from fastapi import FastAPI, Depends
 from sqlalchemy.orm import Session
 
 from database import get_db
-
-from models import (
-    User,
-    Conversation,
-    Message,
-    EmotionResult,
-    RiskAssessment,
-)
-
+from models import User, Conversation, Message, EmotionResult, RiskAssessment
 from schemas import (
     UserCreate,
     UserResponse,
@@ -21,20 +13,13 @@ from schemas import (
 )
 
 from services.chat_service import generate_response
-
 from ml.emotion.emotion_detector import detect_emotion
-
 from ml.emergency.emergency_detector import detect_emergency
-
 from ml.memory.memory_service import (
     retrieve_relevant_memories,
     store_message_embedding,
 )
 
-
-# ============================================================
-# FASTAPI APPLICATION
-# ============================================================
 
 app = FastAPI(
     title="ASHA",
@@ -42,10 +27,6 @@ app = FastAPI(
     version="1.0.0",
 )
 
-
-# ============================================================
-# ROOT
-# ============================================================
 
 @app.get("/")
 def root():
@@ -55,10 +36,6 @@ def root():
     }
 
 
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
 @app.get("/health")
 def health():
     return {
@@ -66,14 +43,11 @@ def health():
     }
 
 
-# ============================================================
-# CREATE USER
-# ============================================================
+# ---------------------------------------------------------
+# USER
+# ---------------------------------------------------------
 
-@app.post(
-    "/users",
-    response_model=UserResponse,
-)
+@app.post("/users", response_model=UserResponse)
 def create_user(
     user: UserCreate,
     db: Session = Depends(get_db),
@@ -91,14 +65,11 @@ def create_user(
     return new_user
 
 
-# ============================================================
-# CREATE CONVERSATION
-# ============================================================
+# ---------------------------------------------------------
+# CONVERSATION
+# ---------------------------------------------------------
 
-@app.post(
-    "/conversations",
-    response_model=ConversationResponse,
-)
+@app.post("/conversations", response_model=ConversationResponse)
 def create_conversation(
     conversation: ConversationCreate,
     db: Session = Depends(get_db),
@@ -110,9 +81,7 @@ def create_conversation(
     )
 
     if not user:
-        return {
-            "error": "User not found"
-        }
+        return {"error": "User not found"}
 
     new_conversation = Conversation(
         user_id=conversation.user_id
@@ -125,30 +94,23 @@ def create_conversation(
     return new_conversation
 
 
-# ============================================================
-# CREATE MESSAGE
-# ============================================================
+# ---------------------------------------------------------
+# MESSAGE
+# ---------------------------------------------------------
 
-@app.post(
-    "/messages",
-    response_model=MessageResponse,
-)
+@app.post("/messages", response_model=MessageResponse)
 def create_message(
     message: MessageCreate,
     db: Session = Depends(get_db),
 ):
     conversation = (
         db.query(Conversation)
-        .filter(
-            Conversation.id == message.conversation_id
-        )
+        .filter(Conversation.id == message.conversation_id)
         .first()
     )
 
     if not conversation:
-        return {
-            "error": "Conversation not found"
-        }
+        return {"error": "Conversation not found"}
 
     new_message = Message(
         conversation_id=message.conversation_id,
@@ -163,9 +125,9 @@ def create_message(
     return new_message
 
 
-# ============================================================
-# ASHA CHAT ENDPOINT
-# ============================================================
+# ---------------------------------------------------------
+# CHAT
+# ---------------------------------------------------------
 
 @app.post("/chat")
 def chat(
@@ -173,9 +135,13 @@ def chat(
     db: Session = Depends(get_db),
 ):
 
-    # --------------------------------------------------------
-    # 1. Check conversation
-    # --------------------------------------------------------
+    print("\n========================================")
+    print("1. Chat request received")
+    print("========================================")
+
+    # -----------------------------------------------------
+    # Check conversation
+    # -----------------------------------------------------
 
     conversation = (
         db.query(Conversation)
@@ -186,14 +152,17 @@ def chat(
     )
 
     if not conversation:
-        return {
-            "error": "Conversation not found"
-        }
+        print("ERROR: Conversation not found")
+        return {"error": "Conversation not found"}
 
+    print(
+        f"Conversation found: {conversation.id} "
+        f"(user_id={conversation.user_id})"
+    )
 
-    # --------------------------------------------------------
-    # 2. Save user's message
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Save user message
+    # -----------------------------------------------------
 
     user_message = Message(
         conversation_id=message.conversation_id,
@@ -205,25 +174,26 @@ def chat(
     db.commit()
     db.refresh(user_message)
 
+    print("2. User message saved")
+    print(f"Message ID: {user_message.id}")
 
-    # --------------------------------------------------------
-    # 3. Detect emotion
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Emotion detection
+    # -----------------------------------------------------
 
-    emotion_results = detect_emotion(
-        message.content
-    )
+    print("3. Running emotion detection...")
+
+    emotion_results = detect_emotion(message.content)
 
     top_emotion = emotion_results[0]
 
     emotion = top_emotion["label"]
-
     emotion_confidence = top_emotion["score"]
 
-
-    # --------------------------------------------------------
-    # 4. Save emotion result
-    # --------------------------------------------------------
+    print(
+        f"Emotion detected: {emotion} "
+        f"(confidence={emotion_confidence:.4f})"
+    )
 
     emotion_result = EmotionResult(
         message_id=user_message.id,
@@ -235,27 +205,25 @@ def chat(
     db.commit()
     db.refresh(emotion_result)
 
+    print("4. Emotion detection done")
 
-    # --------------------------------------------------------
-    # 5. Detect potential crisis
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Emergency detection
+    # -----------------------------------------------------
 
-    emergency_result = detect_emergency(
-        message.content
-    )
+    print("5. Running emergency detection...")
+
+    emergency_result = detect_emergency(message.content)
 
     risk_signal = emergency_result["risk_signal"]
-
     risk_confidence = emergency_result["confidence"]
+    detection_source = emergency_result.get("detection_source")
 
-    detection_source = emergency_result.get(
-        "detection_source"
+    print(
+        f"Emergency result: {risk_signal} "
+        f"(confidence={risk_confidence:.4f}, "
+        f"source={detection_source})"
     )
-
-
-    # --------------------------------------------------------
-    # 6. Save emergency-risk assessment
-    # --------------------------------------------------------
 
     risk_assessment = RiskAssessment(
         message_id=user_message.id,
@@ -267,19 +235,21 @@ def chat(
     db.commit()
     db.refresh(risk_assessment)
 
+    print("6. Emergency detection done")
 
-    # --------------------------------------------------------
-    # 7. Memory retrieval
-    #
-    # Crisis messages DO NOT retrieve normal memories.
-    # Normal messages retrieve only relevant memories.
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Memory retrieval
+    # -----------------------------------------------------
 
     if risk_signal == "potential_crisis":
+
+        print("7. Crisis detected - skipping memory retrieval")
 
         relevant_memories = []
 
     else:
+
+        print("7. Retrieving relevant memories...")
 
         relevant_memories = retrieve_relevant_memories(
             db=db,
@@ -289,12 +259,18 @@ def chat(
             max_distance=0.5,
         )
 
+        print(
+            f"Memory retrieval done. "
+            f"Found {len(relevant_memories)} memories."
+        )
 
-    # --------------------------------------------------------
-    # 8. Generate ASHA response
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Generate response
+    # -----------------------------------------------------
 
     if risk_signal == "potential_crisis":
+
+        print("8. Crisis detected - using safety response")
 
         response_text = (
             "I'm really sorry you're going through something "
@@ -309,19 +285,23 @@ def chat(
 
     else:
 
+        print("8. Calling Gemini...")
+        print("----------------------------------------")
+
         response_text = generate_response(
             message=message.content,
             emotion=emotion,
             relevant_memories=relevant_memories,
         )
 
+        print("----------------------------------------")
+        print("9. Gemini response received")
 
-    # --------------------------------------------------------
-    # 9. Store current user message embedding
-    #
-    # This is done AFTER memory retrieval so the current
-    # message does not retrieve itself.
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Store user message embedding
+    # -----------------------------------------------------
+
+    print("10. Storing message embedding...")
 
     store_message_embedding(
         db=db,
@@ -330,10 +310,11 @@ def chat(
         text=message.content,
     )
 
+    print("11. Message embedding stored")
 
-    # --------------------------------------------------------
-    # 10. Save ASHA's response
-    # --------------------------------------------------------
+    # -----------------------------------------------------
+    # Save assistant response
+    # -----------------------------------------------------
 
     assistant_message = Message(
         conversation_id=message.conversation_id,
@@ -345,10 +326,15 @@ def chat(
     db.commit()
     db.refresh(assistant_message)
 
+    print("12. Assistant message saved")
 
-    # --------------------------------------------------------
-    # 11. Return complete response
-    # --------------------------------------------------------
+    print("========================================")
+    print("CHAT REQUEST COMPLETED")
+    print("========================================\n")
+
+    # -----------------------------------------------------
+    # Return response
+    # -----------------------------------------------------
 
     return {
         "user_message": {
