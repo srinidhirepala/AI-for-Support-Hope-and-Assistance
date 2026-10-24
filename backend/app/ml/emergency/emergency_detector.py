@@ -1,11 +1,16 @@
 from pathlib import Path
 import re
 
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    pipeline,
-)
+try:
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForSequenceClassification,
+        pipeline,
+    )
+except ImportError:
+    AutoTokenizer = None
+    AutoModelForSequenceClassification = None
+    pipeline = None
 
 
 # ============================================================
@@ -13,7 +18,6 @@ from transformers import (
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parents[4]
-
 MODEL_DIR = (
     BASE_DIR
     / "models"
@@ -22,19 +26,24 @@ MODEL_DIR = (
 )
 
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+tokenizer = None
+model = None
+emergency_classifier = None
 
-model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL_DIR
-)
-
-
-emergency_classifier = pipeline(
-    "text-classification",
-    model=model,
-    tokenizer=tokenizer,
-    device=-1,
-)
+if AutoTokenizer is not None and AutoModelForSequenceClassification is not None and pipeline is not None:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR)
+        emergency_classifier = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer,
+            device=-1,
+        )
+    except Exception:
+        tokenizer = None
+        model = None
+        emergency_classifier = None
 
 
 # ============================================================
@@ -101,14 +110,18 @@ def detect_emergency(text: str):
     # ML classifier
     # --------------------------------------------------------
 
-    result = emergency_classifier(
-        text,
-        truncation=True,
-        max_length=256,
-    )[0]
+    if emergency_classifier is None:
+        label = "NO_CRISIS"
+        confidence = 0.5
+    else:
+        result = emergency_classifier(
+            text,
+            truncation=True,
+            max_length=256,
+        )[0]
 
-    label = result["label"]
-    confidence = result["score"]
+        label = result["label"]
+        confidence = result["score"]
 
     # --------------------------------------------------------
     # Final risk decision

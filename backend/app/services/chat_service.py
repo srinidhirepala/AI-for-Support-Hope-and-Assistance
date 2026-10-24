@@ -1,7 +1,11 @@
 import os
 
 from dotenv import load_dotenv
-from google import genai
+
+try:
+    from google import genai
+except ImportError:
+    genai = None
 
 load_dotenv()
 
@@ -151,7 +155,7 @@ def generate_response(
     # Try Gemini first
     # ---------------------------------------------------------
 
-    if GEMINI_API_KEY:
+    if GEMINI_API_KEY and genai is not None:
 
         try:
             print("Attempting Gemini request...")

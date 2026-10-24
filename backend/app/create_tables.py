@@ -6,6 +6,7 @@ from models import (
     EmotionResult,
     RiskAssessment,
     SelfAssessment,
+    MessageEmbedding,
 )
 
 

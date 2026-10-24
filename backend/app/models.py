@@ -12,7 +12,6 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from database import Base
-from pgvector.sqlalchemy import Vector
 
 
 class User(Base):
@@ -21,11 +20,17 @@ class User(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
     preferred_language = Column(String(50), default="English")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     conversations = relationship(
         "Conversation",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    assessments = relationship(
+        "SelfAssessment",
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -124,8 +129,12 @@ class SelfAssessment(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     assessment_type = Column(String(50), nullable=False)
+    answers = Column(Text, nullable=True)
     score = Column(Float, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    user = relationship("User", back_populates="assessments")
+
 
 class MessageEmbedding(Base):
     __tablename__ = "message_embeddings"
@@ -146,7 +155,7 @@ class MessageEmbedding(Base):
     )
 
     embedding = Column(
-        Vector(384),
+        Text,
         nullable=False,
     )
 
