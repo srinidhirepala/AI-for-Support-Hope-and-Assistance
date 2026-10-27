@@ -1,11 +1,17 @@
 from pathlib import Path
+import logging
 import re
 
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSequenceClassification,
-    pipeline,
-)
+try:
+    from transformers import (
+        AutoTokenizer,
+        AutoModelForSequenceClassification,
+        pipeline,
+    )
+except ImportError:
+    AutoTokenizer = None
+    AutoModelForSequenceClassification = None
+    pipeline = None
 
 
 # ============================================================
@@ -13,7 +19,6 @@ from transformers import (
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parents[4]
-
 MODEL_DIR = (
     BASE_DIR
     / "models"
@@ -22,19 +27,28 @@ MODEL_DIR = (
 )
 
 
-tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+tokenizer = None
+model = None
+emergency_classifier = None
+logger = logging.getLogger(__name__)
 
-model = AutoModelForSequenceClassification.from_pretrained(
-    MODEL_DIR
-)
-
-
-emergency_classifier = pipeline(
-    "text-classification",
-    model=model,
-    tokenizer=tokenizer,
-    device=-1,
-)
+if AutoTokenizer is not None and AutoModelForSequenceClassification is not None and pipeline is not None:
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_DIR)
+        emergency_classifier = pipeline(
+            "text-classification",
+            model=model,
+            tokenizer=tokenizer,
+            device=-1,
+        )
+    except Exception as error:
+        logger.warning("Emergency classifier unavailable (%s)", type(error).__name__)
+        tokenizer = None
+        model = None
+        emergency_classifier = None
+else:
+    logger.warning("Emergency classifier unavailable because transformers is not installed")
 
 
 # ============================================================
@@ -101,14 +115,18 @@ def detect_emergency(text: str):
     # ML classifier
     # --------------------------------------------------------
 
-    result = emergency_classifier(
-        text,
-        truncation=True,
-        max_length=256,
-    )[0]
+    if emergency_classifier is not None:
+        result = emergency_classifier(
+            text,
+            truncation=True,
+            max_length=256,
+        )[0]
 
-    label = result["label"]
-    confidence = result["score"]
+        label = result["label"]
+        confidence = result["score"]
+    else:
+        label = "UNAVAILABLE"
+        confidence = None
 
     # --------------------------------------------------------
     # Final risk decision
@@ -117,7 +135,9 @@ def detect_emergency(text: str):
     if explicit_crisis:
         risk_signal = "potential_crisis"
         detection_source = "explicit_crisis_guardrail"
-
+    elif emergency_classifier is None:
+        risk_signal = "no_crisis_signal"
+        detection_source = "explicit_guardrail_only"
     elif label == "POTENTIAL_CRISIS":
         risk_signal = "potential_crisis"
         detection_source = "ml_classifier"
@@ -131,4 +151,5 @@ def detect_emergency(text: str):
         "risk_signal": risk_signal,
         "confidence": confidence,
         "detection_source": detection_source,
+        "classifier_available": emergency_classifier is not None,
     }
