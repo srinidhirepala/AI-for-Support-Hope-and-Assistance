@@ -1,17 +1,8 @@
-from database import Base, engine
-from models import (
-    User,
-    Conversation,
-    Message,
-    EmotionResult,
-    RiskAssessment,
-    SelfAssessment,
-    MessageEmbedding,
-)
+from app.database import initialize_database
 
 
 print("Creating ASHA database tables...")
 
-Base.metadata.create_all(bind=engine)
+initialize_database()
 
 print("✅ Tables created successfully!")

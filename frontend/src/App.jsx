@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BrowserRouter,
   Link,
   Navigate,
   Route,
   Routes,
+  useSearchParams,
   useLocation,
   useNavigate,
 } from 'react-router-dom'
@@ -19,7 +20,6 @@ import {
   LogOut,
   MessageSquareText,
   Mic,
-  MoonStar,
   NotebookPen,
   ShieldAlert,
   Sparkles,
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react'
 import './App.css'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 const STORAGE_KEY = 'asha-auth'
 
 const starterPrompts = [
@@ -75,33 +75,60 @@ const crisisResources = [
 ]
 
 function apiRequest(path, options = {}, token) {
-  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) }
+  const headers = { Accept: 'application/json', ...(options.headers || {}) }
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), 40_000)
+  if (options.body) headers['Content-Type'] = 'application/json'
   if (token) headers.Authorization = `Bearer ${token}`
 
   return fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
+    signal: options.signal || controller.signal,
+  }).catch((error) => {
+    if (error.name === 'AbortError') {
+      throw new Error('The request timed out. Please try again.')
+    }
+    throw new Error(
+      `Could not reach ASHA at ${API_BASE_URL}. Check that the backend is running, VITE_API_URL is correct, and the backend allows this frontend origin (${window.location.origin}) in its CORS settings.`,
+    )
   }).then(async (response) => {
     const contentType = response.headers.get('content-type') || ''
     const payload = contentType.includes('application/json') ? await response.json() : null
 
     if (!response.ok) {
-      const message = payload?.detail || payload?.error || 'Something went wrong.'
+      const detail = payload?.detail || payload?.error
+      const message = Array.isArray(detail)
+        ? detail.map((issue) => issue.msg).join(' ')
+        : detail || 'The request could not be completed.'
       throw new Error(message)
     }
 
     return payload
-  })
+  }).finally(() => window.clearTimeout(timeoutId))
+}
+
+function readStoredAuth() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    const saved = raw ? JSON.parse(raw) : null
+    return saved && typeof saved.token === 'string' && saved.user
+      ? saved
+      : { token: '', user: null }
+  } catch {
+    return { token: '', user: null }
+  }
 }
 
 function App() {
-  const [auth, setAuth] = useState(() => {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    return raw ? JSON.parse(raw) : { token: '', user: null }
-  })
+  const [auth, setAuth] = useState(readStoredAuth)
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(auth))
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(auth))
+    } catch {
+      // Authentication remains available for this page session if storage is blocked.
+    }
   }, [auth])
 
   return (
@@ -236,7 +263,7 @@ function LandingPage({ isLoggedIn }) {
         <div className="feature-grid">
           <FeatureCard icon={<HeartHandshake size={20} />} title="Warm support" text="Thoughtful, calm, non-judgmental conversation for everyday feelings." />
           <FeatureCard icon={<BrainCircuit size={20} />} title="Reflection" text="Daily self-check-ins and guided prompts to build emotional awareness." />
-          <FeatureCard icon={<ShieldAlert size={20} />} title="Safety-aware" text="Crisis support is prioritized with clear emergency resources when needed." />
+          <FeatureCard icon={<ShieldAlert size={20} />} title="Safety information" text="Emergency resources are easy to reach, and explicit safety checks can trigger the backend response." />
         </div>
       </div>
     </div>
@@ -294,7 +321,7 @@ function AuthPage({ mode, setAuth }) {
       setAuth({ token: response.access_token, user: response.user })
       navigate('/chat')
     } catch (err) {
-      setError(err.message)
+      setError(err instanceof Error ? err.message : 'Unable to complete this request.')
     } finally {
       setLoading(false)
     }
@@ -376,7 +403,7 @@ function AuthPage({ mode, setAuth }) {
   )
 }
 
-function AssessmentPage({ user, token }) {
+function AssessmentPage({ token }) {
   const navigate = useNavigate()
   const [index, setIndex] = useState(0)
   const [answers, setAnswers] = useState({})
@@ -422,7 +449,7 @@ function AssessmentPage({ user, token }) {
       }, token)
       setSubmitted(true)
     } catch (err) {
-      setError(err.message)
+      setError(err instanceof Error ? err.message : 'Unable to save your check-in.')
     }
   }
 
@@ -498,36 +525,69 @@ function AssessmentPage({ user, token }) {
 }
 
 function ChatPage({ user, token }) {
-  const navigate = useNavigate()
-  const messagesEndRef = useRef(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const chatWindowRef = useRef(null)
+  const recognitionRef = useRef(null)
+  const sendingRef = useRef(false)
   const [conversation, setConversation] = useState(null)
   const [messages, setMessages] = useState([])
   const [composer, setComposer] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [crisisResourcesVisible, setCrisisResourcesVisible] = useState(false)
+  const [crisisClassifierUnavailable, setCrisisClassifierUnavailable] = useState(false)
+  const [aiUnavailable, setAiUnavailable] = useState(false)
+  const [geminiApiKeyConfigured, setGeminiApiKeyConfigured] = useState(false)
+  const [geminiSdkAvailable, setGeminiSdkAvailable] = useState(false)
+  const [voiceStatus, setVoiceStatus] = useState('')
+  const [speaking, setSpeaking] = useState(false)
+  const [listening, setListening] = useState(false)
 
   useEffect(() => {
     let ignore = false
 
     async function init() {
       try {
+        const health = await apiRequest('/health', { method: 'GET' })
+        if (!ignore) {
+          setCrisisClassifierUnavailable(
+            health?.emergency_classifier_available === false,
+          )
+          setAiUnavailable(health?.gemini_configured === false)
+          setGeminiApiKeyConfigured(health?.gemini_api_key_configured === true)
+          setGeminiSdkAvailable(health?.gemini_sdk_available === true)
+        }
+
         const list = await apiRequest('/conversations', { method: 'GET' }, token)
+        const requestedId = Number(searchParams.get('conversation'))
+        const selectedConversation = list.find((item) => item.id === requestedId)
+        const latest = selectedConversation || list[0]
+
+        if (latest) {
+          const messageList = await apiRequest(`/conversations/${latest.id}/messages`, { method: 'GET' }, token)
+          if (!ignore) {
+            setConversation(latest)
+            setMessages(messageList)
+            setCrisisResourcesVisible(
+              messageList.some((message) => message.risk_signal === 'potential_crisis'),
+            )
+          }
+          return
+        }
+
         if (list.length === 0) {
           const newConversation = await apiRequest('/conversations', {
             method: 'POST',
             body: JSON.stringify({ title: 'New conversation' }),
           }, token)
-          if (!ignore) setConversation(newConversation)
+          if (!ignore) {
+            setConversation(newConversation)
+            setSearchParams({ conversation: String(newConversation.id) }, { replace: true })
+          }
           return
         }
-        const latest = list[0]
-        if (!ignore) {
-          setConversation(latest)
-          const messageList = await apiRequest(`/conversations/${latest.id}/messages`, { method: 'GET' }, token)
-          setMessages(messageList)
-        }
       } catch (err) {
-        if (!ignore) setError(err.message)
+        if (!ignore) setError(err instanceof Error ? err.message : 'Unable to load conversations.')
       }
     }
 
@@ -535,21 +595,38 @@ function ChatPage({ user, token }) {
     return () => {
       ignore = true
     }
-  }, [token])
+  }, [token, searchParams, setSearchParams])
+
+  useEffect(() => () => {
+    recognitionRef.current?.stop()
+    window.speechSynthesis?.cancel()
+  }, [])
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const chatWindow = chatWindowRef.current
+    if (chatWindow) chatWindow.scrollTop = chatWindow.scrollHeight
   }, [messages, loading])
 
   async function submitMessage() {
     const trimmed = composer.trim()
-    if (!trimmed || !conversation || loading) return
+    if (!trimmed || !conversation || loading || sendingRef.current) return
 
+    sendingRef.current = true
     setLoading(true)
     setError('')
     const userContent = trimmed
     setComposer('')
-    setMessages((prev) => [...prev, { id: Date.now(), conversation_id: conversation.id, sender: 'user', content: userContent }])
+    const optimisticMessageId = Date.now()
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: optimisticMessageId,
+        conversation_id: conversation.id,
+        sender: 'user',
+        content: userContent,
+        timestamp: new Date().toISOString(),
+      },
+    ])
 
     try {
       const response = await apiRequest('/chat', {
@@ -561,12 +638,32 @@ function ChatPage({ user, token }) {
         }),
       }, token)
 
-      setMessages((prev) => [...prev, { ...response.assistant_message, timestamp: new Date().toISOString() }])
-      const refreshed = await apiRequest(`/conversations/${conversation.id}/messages`, { method: 'GET' }, token)
-      setMessages(refreshed)
+      setCrisisResourcesVisible(response.emergency?.risk_signal === 'potential_crisis')
+      setCrisisClassifierUnavailable(response.emergency?.classifier_available === false)
+      setAiUnavailable(false)
+      const responseTimestamp = new Date().toISOString()
+      setMessages((previous) => [
+        ...previous.filter((message) => message.id !== optimisticMessageId),
+        {
+          ...response.user_message,
+          timestamp: responseTimestamp,
+          emotion: response.emotion
+            ? { label: response.emotion, confidence: response.emotion_confidence }
+            : null,
+          risk_signal: response.emergency?.risk_signal,
+        },
+        { ...response.assistant_message, timestamp: responseTimestamp },
+      ])
     } catch (err) {
-      setError(err.message)
+      const message = err instanceof Error ? err.message : 'Unable to send your message.'
+      setError(message)
+      setMessages((previous) =>
+        previous.filter((item) => item.id !== optimisticMessageId),
+      )
+      setComposer((previous) => previous || userContent)
+      if (/Gemini|AI chat/i.test(message)) setAiUnavailable(true)
     } finally {
+      sendingRef.current = false
       setLoading(false)
     }
   }
@@ -578,6 +675,78 @@ function ChatPage({ user, token }) {
     }
   }
 
+  function startVoiceInput() {
+    if (listening) {
+      recognitionRef.current?.stop()
+      setVoiceStatus('Voice input stopped.')
+      return
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SpeechRecognition) {
+      setVoiceStatus('Voice dictation is not supported in this browser. You can type your message instead.')
+      return
+    }
+
+    const recognition = new SpeechRecognition()
+    recognition.lang = {
+      English: 'en-IN',
+      Hindi: 'hi-IN',
+      Telugu: 'te-IN',
+      Tamil: 'ta-IN',
+    }[user?.preferred_language || 'English'] || 'en-IN'
+    recognition.interimResults = false
+    recognition.onstart = () => {
+      setListening(true)
+      setVoiceStatus('Listening. Speak when you are ready.')
+    }
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript
+      setComposer((previous) => `${previous}${previous ? ' ' : ''}${transcript}`)
+      setVoiceStatus('Voice note added to your message. Review it before sending.')
+    }
+    recognition.onerror = (event) => {
+      setListening(false)
+      setVoiceStatus(
+        event.error === 'not-allowed'
+          ? 'Microphone permission was denied. You can type your message instead.'
+          : `Voice input could not start (${event.error}). Please try typing instead.`,
+      )
+    }
+    recognition.onend = () => setListening(false)
+    recognitionRef.current = recognition
+    recognition.start()
+  }
+
+  function toggleSpeech() {
+    if (!('speechSynthesis' in window)) {
+      setVoiceStatus('Audio playback is not supported in this browser.')
+      return
+    }
+
+    if (speaking) {
+      window.speechSynthesis.cancel()
+      setSpeaking(false)
+      return
+    }
+
+    const latestAssistantMessage = [...messages].reverse().find((message) => message.sender === 'assistant')
+    if (!latestAssistantMessage) {
+      setVoiceStatus('There is no ASHA response to play yet.')
+      return
+    }
+
+    const utterance = new SpeechSynthesisUtterance(latestAssistantMessage.content)
+    utterance.onstart = () => setSpeaking(true)
+    utterance.onend = () => setSpeaking(false)
+    utterance.onerror = () => {
+      setSpeaking(false)
+      setVoiceStatus('Audio playback failed. You can read the response above.')
+    }
+    window.speechSynthesis.speak(utterance)
+    setVoiceStatus('Playing the latest ASHA response.')
+  }
+
   async function startNewChat() {
     try {
       const newConversation = await apiRequest('/conversations', {
@@ -586,8 +755,11 @@ function ChatPage({ user, token }) {
       }, token)
       setConversation(newConversation)
       setMessages([])
+      setCrisisResourcesVisible(false)
+      setCrisisClassifierUnavailable(false)
+      setSearchParams({ conversation: String(newConversation.id) }, { replace: true })
     } catch (err) {
-      setError(err.message)
+      setError(err instanceof Error ? err.message : 'Unable to start a new conversation.')
     }
   }
 
@@ -596,7 +768,10 @@ function ChatPage({ user, token }) {
       <div className="chat-header">
         <div>
           <div className="eyebrow">ASHA AI</div>
-          <h2>How are you feeling today?</h2>
+          <h2>A space to talk things through</h2>
+          <p className="chat-subtitle">
+            Share at your own pace. ASHA will listen and respond in {user?.preferred_language || 'English'}.
+          </p>
         </div>
         <button className="secondary-button" type="button" onClick={startNewChat}>New chat</button>
       </div>
@@ -609,7 +784,14 @@ function ChatPage({ user, token }) {
         ))}
       </div>
 
-      <div className="chat-window">
+      <div
+        className="chat-window"
+        ref={chatWindowRef}
+        role="log"
+        aria-label="Conversation messages"
+        aria-live="polite"
+        aria-busy={loading}
+      >
         {messages.length === 0 && !loading && (
           <div className="empty-state">
             <Sparkles size={28} />
@@ -622,7 +804,15 @@ function ChatPage({ user, token }) {
           <div key={message.id} className={`message-row ${message.sender === 'user' ? 'user' : 'assistant'}`}>
             <div className="message-bubble">
               <p>{message.content}</p>
-              <span>{new Date(message.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <span>{message.timestamp ? new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
+              {message.emotion && (
+                <small className="emotion-insight">
+                  Estimated emotion: {message.emotion.label}
+                  {typeof message.emotion.confidence === 'number'
+                    ? ` · ${Math.round(message.emotion.confidence * 100)}% confidence`
+                    : ''}
+                </small>
+              )}
             </div>
           </div>
         ))}
@@ -637,8 +827,31 @@ function ChatPage({ user, token }) {
           </div>
         )}
 
-        {error && <div className="error-box">{error}</div>}
-        <div ref={messagesEndRef} />
+        {error && <div className="error-box" role="alert">{error}</div>}
+        {crisisResourcesVisible && (
+          <div className="notice-box" role="alert">
+            The support response above is from ASHA's safety service. If you may be in immediate danger,
+            contact local emergency services or someone you trust. In India, call 112 for emergency help
+            or 14416 for Tele-MANAS; verify current availability.
+          </div>
+        )}
+        {aiUnavailable && (
+          <div className="notice-box chat-ai-unavailable" role="status">
+            Gemini AI responses are unavailable, and ASHA will not substitute scripted replies.
+            {!geminiApiKeyConfigured && ' Add GEMINI_API_KEY to backend\\.env.'}
+            {!geminiSdkAvailable && ' Install the backend requirements to enable the Gemini SDK.'}
+            {geminiApiKeyConfigured && geminiSdkAvailable && ' Check the key, Gemini quota, and backend network connection.'}
+            {' '}Restart the backend after changing its configuration.
+          </div>
+        )}
+        {!crisisResourcesVisible && crisisClassifierUnavailable && (
+          <div className="notice-box" role="status">
+            ASHA's automated crisis-classification model is not configured in this environment.
+            Explicit safety checks remain active, but they cannot identify every crisis. If you feel
+            unsafe, contact a trusted person or local emergency services; in India, call 112 or
+            Tele-MANAS at 14416 and verify current availability.
+          </div>
+        )}
       </div>
 
       <div className="composer-box">
@@ -647,19 +860,27 @@ function ChatPage({ user, token }) {
           onChange={(e) => setComposer(e.target.value)}
           onKeyDown={handleKeyDown}
           rows={3}
+          aria-label="Write a message to ASHA"
           placeholder="Share what is on your mind..."
         />
         <div className="composer-actions">
-          <button type="button" className="icon-button" aria-label="Voice input">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={listening ? 'Stop voice input' : 'Voice input'}
+            aria-pressed={listening}
+            onClick={startVoiceInput}
+          >
             <Mic size={18} />
           </button>
-          <button type="button" className="icon-button" aria-label="Text to speech">
+          <button type="button" className="icon-button" aria-label={speaking ? 'Stop audio playback' : 'Play latest response'} onClick={toggleSpeech}>
             <Volume2 size={18} />
           </button>
           <button type="button" className="primary-button" onClick={submitMessage} disabled={loading || !composer.trim()}>
             Send
           </button>
         </div>
+        {voiceStatus && <div className="composer-status" role="status">{voiceStatus}</div>}
       </div>
     </div>
   )
@@ -667,11 +888,14 @@ function ChatPage({ user, token }) {
 
 function HistoryPage({ token }) {
   const [conversations, setConversations] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     apiRequest('/conversations', { method: 'GET' }, token)
       .then(setConversations)
-      .catch(() => setConversations([]))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Unable to load conversation history.'))
+      .finally(() => setLoading(false))
   }, [token])
 
   return (
@@ -684,7 +908,11 @@ function HistoryPage({ token }) {
           </div>
         </div>
 
-        {conversations.length === 0 ? (
+        {loading ? (
+          <div className="empty-state compact" role="status">Loading your conversations…</div>
+        ) : error ? (
+          <div className="error-box" role="alert">{error}</div>
+        ) : conversations.length === 0 ? (
           <div className="empty-state compact">
             <BookOpenText size={24} />
             <p>No conversations yet. Start your first check-in in chat.</p>
@@ -697,7 +925,7 @@ function HistoryPage({ token }) {
                   <h3>{conversation.title || `Conversation ${conversation.id}`}</h3>
                   <p>{conversation.started_at ? new Date(conversation.started_at).toLocaleString() : 'Started recently'}</p>
                 </div>
-                <Link to="/chat" className="secondary-button small-button">Open</Link>
+                <Link to={`/chat?conversation=${conversation.id}`} className="secondary-button small-button">Open</Link>
               </div>
             ))}
           </div>
@@ -709,16 +937,16 @@ function HistoryPage({ token }) {
 
 function DashboardPage({ token }) {
   const [dashboard, setDashboard] = useState(null)
+  const [error, setError] = useState('')
 
   useEffect(() => {
     apiRequest('/dashboard', { method: 'GET' }, token)
       .then(setDashboard)
-      .catch(() => setDashboard({ total_conversations: 0, total_messages: 0, latest_assessment: 0, recent_emotions: [], latest_risk_level: 'no_crisis_signal' }))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Unable to load dashboard data.'))
   }, [token])
 
-  if (!dashboard) return <div className="page">Loading…</div>
-
-  const moodBars = ['Very low', 'Low', 'Okay', 'Good', 'Great']
+  if (error) return <div className="page"><div className="error-box" role="alert">{error}</div></div>
+  if (!dashboard) return <div className="page" role="status">Loading…</div>
 
   return (
     <div className="page dashboard-page">
@@ -735,18 +963,16 @@ function DashboardPage({ token }) {
             <div className="eyebrow">Mood history</div>
             <h3>Latest emotional signals</h3>
           </div>
-          <div className="bar-chart">
-            {moodBars.map((label, index) => {
-              const height = 20 + index * 18
-              const active = dashboard.recent_emotions?.includes(label) || index === 2
-              return (
-                <div key={label} className="bar-group">
-                  <div className="bar" style={{ height: `${height}%`, opacity: active ? 1 : 0.35 }} />
-                  <span>{label}</span>
-                </div>
-              )
-            })}
-          </div>
+          {dashboard.recent_emotions?.length ? (
+            <div className="emotion-history">
+              {dashboard.recent_emotions.map((emotion, index) => (
+                <span className="emotion-chip" key={`${emotion}-${index}`}>{emotion}</span>
+              ))}
+              <small>Recent backend emotion estimates; not a clinical measure.</small>
+            </div>
+          ) : (
+            <div className="empty-state compact">No emotion estimates have been recorded yet.</div>
+          )}
         </div>
 
         <div className="panel">
@@ -776,16 +1002,16 @@ function StatCard({ label, value }) {
 
 function ProfilePage({ user, token, setAuth }) {
   const [form, setForm] = useState({ name: user?.name || '', preferred_language: user?.preferred_language || 'English' })
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState({ text: '', error: false })
 
   async function saveProfile(e) {
     e.preventDefault()
     try {
       const updated = await apiRequest('/users/me', { method: 'PATCH', body: JSON.stringify(form) }, token)
       setAuth((prev) => ({ ...prev, user: updated }))
-      setStatus('Profile updated successfully.')
+      setStatus({ text: 'Profile updated successfully.', error: false })
     } catch (err) {
-      setStatus(err.message)
+      setStatus({ text: err instanceof Error ? err.message : 'Unable to update profile.', error: true })
     }
   }
 
@@ -810,7 +1036,7 @@ function ProfilePage({ user, token, setAuth }) {
             </select>
           </label>
 
-          {status && <div className="success-box">{status}</div>}
+          {status.text && <div className={status.error ? 'error-box' : 'success-box'} role={status.error ? 'alert' : 'status'}>{status.text}</div>}
           <button className="primary-button" type="submit">Save changes</button>
         </form>
       </div>
@@ -820,15 +1046,15 @@ function ProfilePage({ user, token, setAuth }) {
 
 function LanguagePage({ user, token, setAuth }) {
   const [language, setLanguage] = useState(user?.preferred_language || 'English')
-  const [status, setStatus] = useState('')
+  const [status, setStatus] = useState({ text: '', error: false })
 
   async function updateLanguage() {
     try {
       const updated = await apiRequest('/users/me', { method: 'PATCH', body: JSON.stringify({ preferred_language: language }) }, token)
       setAuth((prev) => ({ ...prev, user: updated }))
-      setStatus('Language preference saved.')
+      setStatus({ text: 'Language preference saved.', error: false })
     } catch (err) {
-      setStatus(err.message)
+      setStatus({ text: err instanceof Error ? err.message : 'Unable to save language preference.', error: true })
     }
   }
 
@@ -847,7 +1073,7 @@ function LanguagePage({ user, token, setAuth }) {
               {languageOptions.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
           </label>
-          {status && <div className="success-box">{status}</div>}
+          {status.text && <div className={status.error ? 'error-box' : 'success-box'} role={status.error ? 'alert' : 'status'}>{status.text}</div>}
           <button className="primary-button" type="button" onClick={updateLanguage}>Save preference</button>
         </div>
       </div>

@@ -1,4 +1,5 @@
 from pathlib import Path
+import logging
 import re
 
 try:
@@ -29,6 +30,7 @@ MODEL_DIR = (
 tokenizer = None
 model = None
 emergency_classifier = None
+logger = logging.getLogger(__name__)
 
 if AutoTokenizer is not None and AutoModelForSequenceClassification is not None and pipeline is not None:
     try:
@@ -40,10 +42,13 @@ if AutoTokenizer is not None and AutoModelForSequenceClassification is not None 
             tokenizer=tokenizer,
             device=-1,
         )
-    except Exception:
+    except Exception as error:
+        logger.warning("Emergency classifier unavailable (%s)", type(error).__name__)
         tokenizer = None
         model = None
         emergency_classifier = None
+else:
+    logger.warning("Emergency classifier unavailable because transformers is not installed")
 
 
 # ============================================================
@@ -110,10 +115,7 @@ def detect_emergency(text: str):
     # ML classifier
     # --------------------------------------------------------
 
-    if emergency_classifier is None:
-        label = "NO_CRISIS"
-        confidence = 0.5
-    else:
+    if emergency_classifier is not None:
         result = emergency_classifier(
             text,
             truncation=True,
@@ -122,6 +124,9 @@ def detect_emergency(text: str):
 
         label = result["label"]
         confidence = result["score"]
+    else:
+        label = "UNAVAILABLE"
+        confidence = None
 
     # --------------------------------------------------------
     # Final risk decision
@@ -130,7 +135,9 @@ def detect_emergency(text: str):
     if explicit_crisis:
         risk_signal = "potential_crisis"
         detection_source = "explicit_crisis_guardrail"
-
+    elif emergency_classifier is None:
+        risk_signal = "no_crisis_signal"
+        detection_source = "explicit_guardrail_only"
     elif label == "POTENTIAL_CRISIS":
         risk_signal = "potential_crisis"
         detection_source = "ml_classifier"
@@ -144,4 +151,5 @@ def detect_emergency(text: str):
         "risk_signal": risk_signal,
         "confidence": confidence,
         "detection_source": detection_source,
+        "classifier_available": emergency_classifier is not None,
     }

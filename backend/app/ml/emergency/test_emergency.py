@@ -1,4 +1,4 @@
-from emergency_detector import detect_emergency
+from app.ml.emergency.emergency_detector import detect_emergency
 
 test_messages = [
     "I am having a difficult day and feel stressed.",

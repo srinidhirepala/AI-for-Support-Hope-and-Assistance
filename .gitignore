@@ -2,6 +2,7 @@
 .env
 __pycache__/
 *.pyc
+backend/asha.db
 
 # Trained ML models
 models/emergency/

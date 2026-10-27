@@ -1,4 +1,7 @@
 import os
+import json
+import secrets
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -7,20 +10,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from database import get_db
-from models import (
+from app.database import get_db, initialize_database
+from app.models import (
     Conversation,
     EmotionResult,
     Message,
-    MessageEmbedding,
     RiskAssessment,
     SelfAssessment,
     User,
 )
-from schemas import (
+from app.schemas import (
     AssessmentCreate,
     AssessmentResponse,
     ConversationCreate,
@@ -34,29 +36,60 @@ from schemas import (
     UserResponse,
     UserUpdate,
 )
-from services.chat_service import generate_response
-from ml.emotion.emotion_detector import detect_emotion
-from ml.emergency.emergency_detector import detect_emergency
-from ml.memory.memory_service import (
+from app.services.chat_service import (
+    GEMINI_API_KEY,
+    ChatServiceError,
+    genai,
+    generate_response,
+)
+from app.ml.emotion.emotion_detector import detect_emotion
+from app.ml.emergency.emergency_detector import (
+    detect_emergency,
+    emergency_classifier,
+)
+from app.ml.memory.memory_service import (
     retrieve_relevant_memories,
     store_message_embedding,
 )
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    initialize_database()
+    yield
+
 
 app = FastAPI(
     title="ASHA",
     description="AI-powered mental well-being assistive chatbot",
     version="1.0.0",
+    lifespan=lifespan,
+)
+
+allowed_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+    "http://localhost:5176",
+    "http://127.0.0.1:5176",
+}
+allowed_origins.update(
+    origin.strip()
+    for origin in os.getenv("FRONTEND_ORIGINS", "").split(",")
+    if origin.strip()
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=sorted(allowed_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-SECRET_KEY = os.getenv("SECRET_KEY", "asha-dev-secret-change-me")
+SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_urlsafe(32)
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
@@ -74,7 +107,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict[str, Any]) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    expire = datetime.now().astimezone() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -109,30 +142,46 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy",
+        "emergency_classifier_available": emergency_classifier is not None,
+        "gemini_configured": bool(GEMINI_API_KEY and genai is not None),
+        "gemini_api_key_configured": bool(GEMINI_API_KEY),
+        "gemini_sdk_available": genai is not None,
+    }
 
 
 @app.post("/auth/register", response_model=UserResponse)
 def register_user(user: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == user.email).first():
+    email = str(user.email).lower()
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(status_code=400, detail="User already exists")
 
     new_user = User(
         name=user.name,
-        email=str(user.email),
+        email=email,
         password_hash=get_password_hash(user.password),
         preferred_language=user.preferred_language,
     )
     db.add(new_user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="User already exists") from exc
     db.refresh(new_user)
     return new_user
 
 
 @app.post("/auth/login", response_model=TokenResponse)
 def login_user(payload: LoginRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == str(payload.email)).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+    email = str(payload.email).lower()
+    user = db.query(User).filter(User.email == email).first()
+    if (
+        not user
+        or not user.password_hash
+        or not verify_password(payload.password, user.password_hash)
+    ):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     token = create_access_token({"sub": user.email})
@@ -230,6 +279,19 @@ def get_messages(
             "sender": message.sender,
             "content": message.content,
             "timestamp": message.timestamp.isoformat() if message.timestamp else None,
+            "emotion": (
+                {
+                    "label": message.emotion.emotion,
+                    "confidence": message.emotion.confidence,
+                }
+                if message.emotion
+                else None
+            ),
+            "risk_signal": (
+                message.risk_assessment.risk_level
+                if message.risk_assessment
+                else None
+            ),
         }
         for message in messages
     ]
@@ -274,6 +336,18 @@ def chat(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    previous_messages = (
+        db.query(Message)
+        .filter(Message.conversation_id == payload.conversation_id)
+        .order_by(Message.id.desc())
+        .limit(20)
+        .all()
+    )
+    conversation_history = [
+        {"sender": message.sender, "content": message.content}
+        for message in reversed(previous_messages)
+    ]
+
     user_message = Message(
         conversation_id=payload.conversation_id,
         sender="user",
@@ -283,22 +357,25 @@ def chat(
     db.commit()
     db.refresh(user_message)
 
-    emotion_result = detect_emotion(payload.content)
-    top_emotion = emotion_result[0]
-    emotion = top_emotion["label"]
-    emotion_confidence = float(top_emotion["score"])
+    emotion_results = detect_emotion(payload.content)
+    top_emotion = emotion_results[0] if emotion_results else None
+    emotion = top_emotion["label"] if top_emotion else None
+    emotion_confidence = float(top_emotion["score"]) if top_emotion else None
 
-    db.add(
-        EmotionResult(
-            message_id=user_message.id,
-            emotion=emotion,
-            confidence=emotion_confidence,
+    if top_emotion:
+        db.add(
+            EmotionResult(
+                message_id=user_message.id,
+                emotion=emotion,
+                confidence=emotion_confidence,
+            )
         )
-    )
 
     emergency_result = detect_emergency(payload.content)
     risk_signal = emergency_result["risk_signal"]
-    risk_confidence = float(emergency_result["confidence"])
+    risk_confidence = emergency_result.get("confidence")
+    if risk_confidence is not None:
+        risk_confidence = float(risk_confidence)
     detection_source = emergency_result.get("detection_source")
 
     db.add(
@@ -320,17 +397,29 @@ def chat(
         )
 
     if risk_signal == "potential_crisis":
+        response_mode = "safety_response"
         response_text = (
             "I'm really sorry you're going through something difficult. You do not have to face it alone. "
             "Please reach out to someone you trust, a qualified mental health professional, or a local emergency service if you feel unsafe. "
             "In India, emergency assistance is available via 112 and Tele-MANAS is 14416. Please verify current availability if needed."
         )
     else:
-        response_text = generate_response(
-            message=payload.content,
-            emotion=emotion,
-            relevant_memories=relevant_memories,
-        )
+        try:
+            response_text, response_mode = generate_response(
+                message=payload.content,
+                emotion=emotion,
+                relevant_memories=relevant_memories,
+                conversation_history=conversation_history,
+                preferred_language=current_user.preferred_language or "English",
+            )
+        except ChatServiceError as exc:
+            db.rollback()
+            db.delete(user_message)
+            db.commit()
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=exc.message,
+            ) from exc
 
     store_message_embedding(
         db=db,
@@ -361,7 +450,11 @@ def chat(
             "risk_signal": risk_signal,
             "confidence": risk_confidence,
             "detection_source": detection_source,
+            "classifier_available": emergency_result.get(
+                "classifier_available", True
+            ),
         },
+        "response_mode": response_mode,
         "relevant_memories": relevant_memories,
         "assistant_message": {
             "id": assistant_message.id,
@@ -381,7 +474,7 @@ def create_assessment(
     assessment = SelfAssessment(
         user_id=current_user.id,
         assessment_type=payload.assessment_type,
-        answers=str(payload.answers),
+        answers=json.dumps(payload.answers),
         score=payload.score,
     )
     db.add(assessment)
@@ -415,7 +508,9 @@ def list_assessments(
                 user_id=record.user_id,
                 assessment_type=record.assessment_type,
                 score=record.score,
-                answers={"raw": record.answers} if record.answers else {},
+                answers=json.loads(record.answers)
+                if record.answers and record.answers.startswith(("{", "["))
+                else {},
             )
         )
     return response

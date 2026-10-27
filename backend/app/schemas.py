@@ -1,18 +1,33 @@
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class UserCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=100)
     email: EmailStr
-    password: str
-    preferred_language: str = "English"
+    password: str = Field(min_length=8, max_length=128)
+    preferred_language: str = Field(default="English", max_length=50)
+
+    @field_validator("name")
+    @classmethod
+    def trim_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Name must not be blank")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be no more than 72 UTF-8 bytes")
+        return value
 
 
 class UserUpdate(BaseModel):
-    name: Optional[str] = None
-    preferred_language: Optional[str] = None
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    preferred_language: str | None = Field(default=None, max_length=50)
 
 
 class UserResponse(BaseModel):
@@ -21,13 +36,12 @@ class UserResponse(BaseModel):
     email: str
     preferred_language: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LoginRequest(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -37,23 +51,30 @@ class TokenResponse(BaseModel):
 
 
 class ConversationCreate(BaseModel):
-    title: Optional[str] = None
+    title: str | None = Field(default=None, max_length=100)
 
 
 class ConversationResponse(BaseModel):
     id: int
     user_id: int
-    started_at: Optional[str] = None
-    title: Optional[str] = None
+    started_at: str | None = None
+    title: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageCreate(BaseModel):
     conversation_id: int
-    content: str
+    content: str = Field(min_length=1, max_length=10000)
     sender: str = "user"
+
+    @field_validator("content")
+    @classmethod
+    def trim_content(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Message must not be blank")
+        return value
 
 
 class MessageResponse(BaseModel):
@@ -62,30 +83,28 @@ class MessageResponse(BaseModel):
     sender: str
     content: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class AssessmentCreate(BaseModel):
-    assessment_type: str = "initial"
-    score: Optional[float] = None
-    answers: Dict[str, Any] = {}
+    assessment_type: str = Field(default="initial", min_length=1, max_length=50)
+    score: float | None = None
+    answers: dict[str, Any] = Field(default_factory=dict)
 
 
 class AssessmentResponse(BaseModel):
     id: int
     user_id: int
     assessment_type: str
-    score: Optional[float]
-    answers: Dict[str, Any]
+    score: float | None
+    answers: dict[str, Any]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DashboardSummary(BaseModel):
     total_conversations: int
     total_messages: int
-    latest_assessment: Optional[float]
-    recent_emotions: List[str]
-    latest_risk_level: Optional[str]
+    latest_assessment: float | None
+    recent_emotions: list[str]
+    latest_risk_level: str | None

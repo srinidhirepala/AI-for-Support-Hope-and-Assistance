@@ -1,4 +1,4 @@
-from emotion_detector import detect_emotion
+from app.ml.emotion.emotion_detector import detect_emotion
 
 
 text = "I have been feeling really stressed and worried about everything."

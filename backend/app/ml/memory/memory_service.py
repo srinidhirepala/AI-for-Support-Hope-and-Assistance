@@ -8,7 +8,7 @@ except ImportError:
     SentenceTransformer = None
 from sqlalchemy.orm import Session
 
-from models import MessageEmbedding, Message
+from app.models import MessageEmbedding, Message
 
 
 MODEL_NAME = "all-MiniLM-L6-v2"
