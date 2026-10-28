@@ -57,6 +57,23 @@ def initialize_database() -> None:
                         )
                     )
 
+        if engine.dialect.name == "postgresql":
+            embedding_type = connection.execute(
+                text(
+                    "SELECT udt_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = 'message_embeddings' "
+                    "AND column_name = 'embedding'"
+                )
+            ).scalar_one_or_none()
+            if embedding_type == "vector":
+                connection.execute(
+                    text(
+                        "ALTER TABLE message_embeddings "
+                        "ALTER COLUMN embedding TYPE TEXT USING embedding::text"
+                    )
+                )
+
 
 def get_db():
     db = SessionLocal()
