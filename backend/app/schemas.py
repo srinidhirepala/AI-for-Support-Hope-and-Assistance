@@ -115,6 +115,8 @@ class DashboardSummary(BaseModel):
     latest_assessment: float | None
     recent_emotions: list[str]
     latest_risk_level: str | None
+    assessment_history: list[dict[str, Any]]
+    mood_history: list[dict[str, Any]]
 
 
 class TranslationRequest(BaseModel):
