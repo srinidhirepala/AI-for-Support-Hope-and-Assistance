@@ -1,13 +1,23 @@
 :root {
+  --ink: #29433d;
+  --muted-ink: #687b75;
+  --sage: #789c8a;
+  --sage-deep: #477363;
+  --mist: #edf5f0;
+  --ivory: #fcfaf6;
+  --lavender: #aaa7c8;
+  --peach: #ead2c8;
+  --page-start: #f8f3eb;
+  --page-end: #eef6f1;
   font-family: Inter, ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #1d2b2b;
+  color: var(--ink);
   background:
-    radial-gradient(ellipse at 10% 8%, rgba(169, 201, 178, 0.34), transparent 32%),
-    radial-gradient(ellipse at 91% 22%, rgba(190, 184, 224, 0.3), transparent 30%),
-    radial-gradient(ellipse at 72% 94%, rgba(236, 218, 188, 0.26), transparent 34%),
-    linear-gradient(145deg, #faf8f2 0%, #f1f5ef 52%, #f6f2fa 100%);
+    radial-gradient(ellipse at 4% 4%, rgba(167, 205, 184, 0.42), transparent 30%),
+    radial-gradient(ellipse at 94% 16%, rgba(202, 196, 231, 0.3), transparent 31%),
+    radial-gradient(ellipse at 62% 100%, rgba(245, 220, 187, 0.25), transparent 36%),
+    linear-gradient(145deg, #fcfaf5 0%, #f2f7f2 54%, #f7f3fa 100%);
   background-attachment: fixed;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -27,7 +37,9 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: linear-gradient(180deg, #f7f2e9 0%, #f2f6f2 100%);
+  background:
+    radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.75), transparent 42%),
+    linear-gradient(180deg, var(--page-start) 0%, var(--page-end) 100%);
 }
 
 button,
@@ -56,7 +68,7 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 3px solid #667eae;
+  outline: 3px solid #789c8a;
   outline-offset: 3px;
 }
 
