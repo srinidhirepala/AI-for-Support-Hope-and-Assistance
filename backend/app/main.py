@@ -575,12 +575,45 @@ def dashboard(
         .order_by(RiskAssessment.created_at.desc())
         .first()
     )
+    assessment_history = (
+        db.query(SelfAssessment)
+        .filter(SelfAssessment.user_id == current_user.id)
+        .order_by(SelfAssessment.created_at.asc())
+        .limit(12)
+        .all()
+    )
+    mood_history = (
+        db.query(EmotionResult, Message.timestamp)
+        .join(Message)
+        .join(Conversation)
+        .filter(Conversation.user_id == current_user.id)
+        .order_by(EmotionResult.created_at.asc())
+        .limit(12)
+        .all()
+    )
     return {
         "total_conversations": total_conversations,
         "total_messages": total_messages,
         "latest_assessment": latest_assessment[0] if latest_assessment else None,
         "recent_emotions": [emotion[0] for emotion in recent_emotions],
         "latest_risk_level": latest_risk_level[0] if latest_risk_level else None,
+        "assessment_history": [
+            {
+                "score": record.score,
+                "assessment_type": record.assessment_type,
+                "created_at": record.created_at.isoformat() if record.created_at else None,
+            }
+            for record in assessment_history
+            if record.score is not None
+        ],
+        "mood_history": [
+            {
+                "emotion": result.emotion,
+                "confidence": result.confidence,
+                "created_at": timestamp.isoformat() if timestamp else None,
+            }
+            for result, timestamp in mood_history
+        ],
     }
 
 
