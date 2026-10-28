@@ -23,13 +23,16 @@ import {
   NotebookPen,
   ShieldAlert,
   Sparkles,
+  Moon,
   UserRound,
   Volume2,
+  Sun,
 } from 'lucide-react'
 import './App.css'
 
 const API_BASE_URL = (import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '')
 const STORAGE_KEY = 'asha-auth'
+const THEME_KEY = 'asha-theme'
 
 const starterPrompts = [
   'I\'ve been feeling stressed lately.',
@@ -128,6 +131,13 @@ function readStoredAuth() {
 
 function App() {
   const [auth, setAuth] = useState(readStoredAuth)
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem(THEME_KEY) || 'light'
+    } catch {
+      return 'light'
+    }
+  })
 
   useEffect(() => {
     try {
@@ -139,18 +149,36 @@ function App() {
 
   return (
     <BrowserRouter>
-      <AppLayout auth={auth} setAuth={setAuth} />
+      <AppLayout auth={auth} setAuth={setAuth} theme={theme} setTheme={setTheme} />
     </BrowserRouter>
   )
 }
 
-function AppLayout({ auth, setAuth }) {
+function AppLayout({ auth, setAuth, theme, setTheme }) {
   const location = useLocation()
   const currentPath = location.pathname
   const isLoggedIn = Boolean(auth.token && auth.user)
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${theme === 'dark' ? 'theme-dark' : 'theme-light'}`}>
+      <button
+        className="theme-toggle"
+        type="button"
+        onClick={() => {
+          const nextTheme = theme === 'dark' ? 'light' : 'dark'
+          setTheme(nextTheme)
+          try {
+            localStorage.setItem(THEME_KEY, nextTheme)
+          } catch {
+            // The theme remains available for this page session if storage is blocked.
+          }
+        }}
+        aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+        title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      >
+        {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+        <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
+      </button>
       <aside className={`sidebar ${isLoggedIn ? 'visible' : 'hidden'}`}>
         <div className="brand-wrap">
           <div className="brand-mark">A</div>
@@ -793,6 +821,10 @@ function ChatPage({ user, token }) {
             Share at your own pace. ASHA will listen and respond in {user?.preferred_language || 'English'}.
             Voice input and playback use your selected language when your browser supports it.
           </p>
+          <div className="safe-space-note">
+            <HeartHandshake size={16} />
+            <span>You can start with one sentence. There is no pressure to explain everything at once.</span>
+          </div>
         </div>
         <button className="secondary-button" type="button" onClick={startNewChat}>New chat</button>
       </div>
@@ -817,7 +849,7 @@ function ChatPage({ user, token }) {
           <div className="empty-state">
             <Sparkles size={28} />
             <h3>Start a gentle conversation</h3>
-            <p>ASHA is here to listen and help you reflect, not diagnose.</p>
+            <p>Share what feels comfortable. ASHA is here to listen and help you reflect, not diagnose.</p>
           </div>
         )}
 
@@ -968,6 +1000,9 @@ function DashboardPage({ token }) {
 
   if (error) return <div className="page"><div className="error-box" role="alert">{error}</div></div>
   if (!dashboard) return <div className="page" role="status">Loading…</div>
+  const assessmentHistory = dashboard.assessment_history || []
+  const moodHistory = dashboard.mood_history || []
+  const latestMood = moodHistory[moodHistory.length - 1]?.emotion
 
   return (
     <div className="page dashboard-page">
@@ -981,15 +1016,35 @@ function DashboardPage({ token }) {
       <div className="dashboard-grid">
         <div className="panel">
           <div className="panel-header">
-            <div className="eyebrow">Mood history</div>
-            <h3>Latest emotional signals</h3>
+            <div className="eyebrow">Assessment progress</div>
+            <h3>Your scores over time</h3>
           </div>
-          {dashboard.recent_emotions?.length ? (
-            <div className="emotion-history">
-              {dashboard.recent_emotions.map((emotion, index) => (
-                <span className="emotion-chip" key={`${emotion}-${index}`}>{emotion}</span>
-              ))}
-              <small>Recent backend emotion estimates; not a clinical measure.</small>
+          {assessmentHistory.length ? (
+            <ScoreChart data={assessmentHistory} />
+          ) : (
+            <div className="empty-state compact">Complete an assessment to see your progress here.</div>
+          )}
+        </div>
+
+        <div className="panel">
+          <div className="panel-header">
+            <div className="eyebrow">Mood history</div>
+            <h3>Recent emotional signals</h3>
+          </div>
+          {moodHistory.length ? (
+            <div className="mood-history">
+              <div className="mood-current">
+                <span>Latest signal</span>
+                <strong>{formatMood(latestMood)}</strong>
+              </div>
+              <div className="emotion-history">
+                {moodHistory.slice(-8).map((item, index) => (
+                  <span className="emotion-chip" key={`${item.emotion}-${item.created_at}-${index}`}>
+                    {formatMood(item.emotion)}
+                  </span>
+                ))}
+              </div>
+              <small>These are supportive signals, not a clinical measure.</small>
             </div>
           ) : (
             <div className="empty-state compact">No emotion estimates have been recorded yet.</div>
@@ -998,14 +1053,13 @@ function DashboardPage({ token }) {
 
         <div className="panel">
           <div className="panel-header">
-            <div className="eyebrow">Reflection</div>
-            <h3>Supportive prompts</h3>
+            <div className="eyebrow">Next small steps</div>
+            <h3>What may help today</h3>
           </div>
-          <ul className="prompt-list">
-            <li>What felt manageable about today?</li>
-            <li>What created the most mental load this week?</li>
-            <li>What is one small act of care you can give yourself?</li>
+          <ul className="prompt-list action-list">
+            {getMoodActions(latestMood).map((action) => <li key={action}>{action}</li>)}
           </ul>
+          <small className="dashboard-note">Choose one gentle step; you do not need to do everything.</small>
         </div>
       </div>
     </div>
@@ -1017,6 +1071,55 @@ function StatCard({ label, value }) {
     <div className="stat-card">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function formatMood(mood) {
+  return mood
+    ? mood.replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : 'Not available'
+}
+
+function getMoodActions(mood) {
+  const normalized = (mood || '').toLowerCase()
+  if (/(sad|fear|grief|lonely)/.test(normalized)) {
+    return ['Message or speak with someone you trust.', 'Try a grounding activity: name five things you can see.', 'Take one manageable care step, such as water, food, or rest.']
+  }
+  if (/(anger|stress|anxious|nervous|worry)/.test(normalized)) {
+    return ['Try five slow breaths with a longer exhale.', 'Write down the one thing creating the most pressure.', 'Take a short pause before your next task.']
+  }
+  if (/(happy|joy|calm|content|curious)/.test(normalized)) {
+    return ['Notice what supported this feeling and write it down.', 'Share a small positive moment with someone.', 'Choose one realistic intention for the rest of the day.']
+  }
+  return ['Check in with your body: water, food, movement, or rest.', 'Name one thing that feels manageable right now.', 'Use the chat to reflect on what support would feel useful.']
+}
+
+function ScoreChart({ data }) {
+  const width = 560
+  const height = 190
+  const padding = 28
+  const maximum = Math.max(5, ...data.map((item) => Number(item.score) || 0))
+  const points = data.map((item, index) => {
+    const x = data.length === 1 ? width / 2 : padding + (index * (width - padding * 2)) / (data.length - 1)
+    const y = height - padding - ((Number(item.score) || 0) / maximum) * (height - padding * 2)
+    return { ...item, x, y }
+  })
+
+  return (
+    <div className="score-chart">
+      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Assessment scores over time">
+        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} className="chart-axis" />
+        <polyline points={points.map((point) => `${point.x},${point.y}`).join(' ')} className="score-line" />
+        {points.map((point, index) => (
+          <g key={`${point.created_at}-${index}`}>
+            <circle cx={point.x} cy={point.y} r="5" className="score-point" />
+            <text x={point.x} y={point.y - 10} textAnchor="middle" className="score-label">{point.score}</text>
+          </g>
+        ))}
+      </svg>
+      <div className="chart-caption"><span>Earlier</span><span>Lower score = fewer low/strain answers</span><span>Recent</span></div>
+      <small>Scores reflect this check-in questionnaire and are not a diagnosis.</small>
     </div>
   )
 }
