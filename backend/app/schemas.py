@@ -43,6 +43,13 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1, max_length=128)
 
+    @field_validator("password")
+    @classmethod
+    def validate_password_bytes(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be no more than 72 UTF-8 bytes")
+        return value
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -108,3 +115,16 @@ class DashboardSummary(BaseModel):
     latest_assessment: float | None
     recent_emotions: list[str]
     latest_risk_level: str | None
+
+
+class TranslationRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    source_language: str = Field(default="English", min_length=1, max_length=50)
+    target_language: str = Field(min_length=1, max_length=50)
+
+
+class TranslationResponse(BaseModel):
+    translated_text: str
+    provider: str
+    source_language: str
+    target_language: str

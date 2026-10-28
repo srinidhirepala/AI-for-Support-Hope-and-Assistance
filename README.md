@@ -24,9 +24,29 @@ To enable genuine Gemini chat, create an API key in [Google AI Studio](https://a
 GEMINI_API_KEY=your-private-key
 ```
 
-Restart the backend after changing the key. The backend uses Google's `google-genai` SDK and the `gemini-3.8-flash` model by default; optionally set `GEMINI_MODEL` in `backend\.env` to another model enabled for your key. The key is never sent to the frontend. If the key is missing, invalid, or over quota, chat shows an actionable error and does not return a scripted substitute. Existing explicit crisis safety responses remain available.
+Restart the backend after changing the key. The backend uses Google's `google-genai` SDK and the `gemini-3.6-flash` model by default; optionally set `GEMINI_MODEL` in `backend\.env` to another model enabled for your key. Transient Gemini provider failures are retried automatically. The documented `gemini-3.6-flash` endpoint is stable; preview models should only be selected when enabled for the API key. The key is never sent to the frontend. If the key is missing, invalid, or over quota, chat shows an actionable error and does not return a scripted substitute. Existing explicit crisis safety responses remain available.
 
 The optional trained crisis classifier loads only from `models\emergency\distilroberta_emergency` at the repository root. That directory must contain the fine-tuned Hugging Face `config.json`, model weights (`model.safetensors` or `pytorch_model.bin`), and matching tokenizer assets (`tokenizer_config.json` plus `tokenizer.json` or the model's vocabulary/merges files). If those trained artifacts are absent, ASHA reports the classifier as unavailable and retains its separate explicit-language safety guardrail; the guardrail is not a substitute for a functioning classifier or professional help.
+
+### Translation providers
+
+The authenticated `POST /translate` endpoint tries local IndicTrans2 first and
+falls back to Google Translate when IndicTrans2 is unavailable. The supported
+language names are English, Hindi, Telugu, and Tamil. Google Translate uses the
+existing `deep-translator` dependency and requires network access.
+
+IndicTrans2 is optional because its toolkit may require Microsoft Visual C++
+Build Tools on Windows and downloads large model weights on first use. To
+install it separately:
+
+```powershell
+Set-Location "backend"
+python -m pip install -r requirements-translation.txt
+```
+
+The model names can be overridden in `backend\.env` with
+`INDICTRANS_MODEL_EN_INDIC`, `INDICTRANS_MODEL_INDIC_EN`, and
+`INDICTRANS_MODEL_INDIC_INDIC`.
 
 ### 2. Start the frontend
 

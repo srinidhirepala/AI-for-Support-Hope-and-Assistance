@@ -32,6 +32,8 @@ from app.schemas import (
     MessageCreate,
     MessageResponse,
     TokenResponse,
+    TranslationRequest,
+    TranslationResponse,
     UserCreate,
     UserResponse,
     UserUpdate,
@@ -51,6 +53,7 @@ from app.ml.memory.memory_service import (
     retrieve_relevant_memories,
     store_message_embedding,
 )
+from app.services.translation_service import TranslationError, translate_text
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -149,6 +152,27 @@ def health():
         "gemini_api_key_configured": bool(GEMINI_API_KEY),
         "gemini_sdk_available": genai is not None,
     }
+
+
+@app.post("/translate", response_model=TranslationResponse)
+def translate(
+    payload: TranslationRequest,
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        translated_text, provider = translate_text(
+            payload.text,
+            payload.source_language,
+            payload.target_language,
+        )
+    except TranslationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return TranslationResponse(
+        translated_text=translated_text,
+        provider=provider,
+        source_language=payload.source_language,
+        target_language=payload.target_language,
+    )
 
 
 @app.post("/auth/register", response_model=UserResponse)

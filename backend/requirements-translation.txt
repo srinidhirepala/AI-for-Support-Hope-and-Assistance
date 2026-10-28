@@ -1,0 +1,3 @@
+# Optional local IndicTrans2 provider.
+# On Windows, indictranstoolkit may require Microsoft Visual C++ Build Tools.
+indictranstoolkit

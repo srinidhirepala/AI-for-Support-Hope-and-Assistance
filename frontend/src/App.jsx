@@ -68,6 +68,12 @@ const assessmentQuestions = [
 ]
 
 const languageOptions = ['English', 'Hindi', 'Telugu', 'Tamil']
+const voiceLanguages = {
+  English: 'en-IN',
+  Hindi: 'hi-IN',
+  Telugu: 'te-IN',
+  Tamil: 'ta-IN',
+}
 const crisisResources = [
   { label: 'Emergency', value: '112', description: 'For immediate assistance in India' },
   { label: 'Tele-MANAS', value: '14416', description: 'Mental health support line' },
@@ -689,21 +695,28 @@ function ChatPage({ user, token }) {
     }
 
     const recognition = new SpeechRecognition()
-    recognition.lang = {
-      English: 'en-IN',
-      Hindi: 'hi-IN',
-      Telugu: 'te-IN',
-      Tamil: 'ta-IN',
-    }[user?.preferred_language || 'English'] || 'en-IN'
-    recognition.interimResults = false
+    const language = user?.preferred_language || 'English'
+    const voiceLanguage = voiceLanguages[language] || voiceLanguages.English
+    recognition.lang = voiceLanguage
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.maxAlternatives = 3
     recognition.onstart = () => {
       setListening(true)
       setVoiceStatus('Listening. Speak when you are ready.')
     }
     recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript
-      setComposer((previous) => `${previous}${previous ? ' ' : ''}${transcript}`)
-      setVoiceStatus('Voice note added to your message. Review it before sending.')
+      const finalTranscript = Array.from(event.results)
+        .slice(event.resultIndex)
+        .filter((result) => result.isFinal)
+        .map((result) => result[0]?.transcript?.trim())
+        .filter(Boolean)
+        .join(' ')
+
+      if (finalTranscript) {
+        setComposer((previous) => `${previous}${previous ? ' ' : ''}${finalTranscript}`)
+        setVoiceStatus('Voice note added to your message. Review it before sending.')
+      }
     }
     recognition.onerror = (event) => {
       setListening(false)
@@ -736,7 +749,14 @@ function ChatPage({ user, token }) {
       return
     }
 
+    const language = user?.preferred_language || 'English'
+    const voiceLanguage = voiceLanguages[language] || voiceLanguages.English
     const utterance = new SpeechSynthesisUtterance(latestAssistantMessage.content)
+    utterance.lang = voiceLanguage
+    const matchingVoice = window.speechSynthesis
+      .getVoices()
+      .find((voice) => voice.lang.toLowerCase().startsWith(voiceLanguage.slice(0, 2)))
+    if (matchingVoice) utterance.voice = matchingVoice
     utterance.onstart = () => setSpeaking(true)
     utterance.onend = () => setSpeaking(false)
     utterance.onerror = () => {
@@ -771,6 +791,7 @@ function ChatPage({ user, token }) {
           <h2>A space to talk things through</h2>
           <p className="chat-subtitle">
             Share at your own pace. ASHA will listen and respond in {user?.preferred_language || 'English'}.
+            Voice input and playback use your selected language when your browser supports it.
           </p>
         </div>
         <button className="secondary-button" type="button" onClick={startNewChat}>New chat</button>
