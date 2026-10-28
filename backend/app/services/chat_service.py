@@ -37,7 +37,7 @@ def _configured_setting(name: str, default: str = "") -> str:
 
 
 GEMINI_API_KEY = _configured_setting("GEMINI_API_KEY")
-MODEL_NAME = _configured_setting("GEMINI_MODEL", "gemini-3.8-flash")
+MODEL_NAME = _configured_setting("GEMINI_MODEL", "gemini-3.6-flash")
 logger = logging.getLogger(__name__)
 
 SYSTEM_INSTRUCTIONS = """
@@ -189,7 +189,7 @@ def generate_response(
             api_key=GEMINI_API_KEY,
             http_options=genai_types.HttpOptions(
                 timeout=30_000,
-                retry_options=genai_types.HttpRetryOptions(attempts=1),
+                retry_options=genai_types.HttpRetryOptions(attempts=3),
             ),
         )
         response = client.models.generate_content(
